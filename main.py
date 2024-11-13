@@ -1,16 +1,19 @@
+import time
+import csv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import StaleElementReferenceException
-import time
+from selenium.common.exceptions import StaleElementReferenceException, NoSuchElementException
+
 
 class RestaurantScraper:
     location_data = []
+    visited_links = set()
 
     def __init__(self):
         self.driver = webdriver.Edge()
-        self.wait = WebDriverWait(self.driver, 10)
+        self.wait = WebDriverWait(self.driver, 15)
 
     def search_restaurants(self, search_term="restaurants in Lahore"):
         self.driver.get("https://www.google.com/maps/")
@@ -20,108 +23,113 @@ class RestaurantScraper:
         search_button.click()
         time.sleep(5)
 
-    def scroll_results(self, max_scrolls=10):
-        scrollable_div = self.wait.until(EC.presence_of_element_located((By.XPATH, "//div[@role='feed']")))
-        for _ in range(max_scrolls):
-            self.driver.execute_script('arguments[0].scrollTop = arguments[0].scrollHeight', scrollable_div)
-            time.sleep(2)
+    def clean_data(self, text):
+        if not text:
+            return "NA"
+        unwanted_chars = ['\ue5ca', '\ue0c8', '\ue0b0', '\uf186', '\n', '·']
+        for char in unwanted_chars:
+            text = text.replace(char, "")
+        return text.strip() if text.strip() else "NA"
 
     def get_restaurant_data(self):
-        for index in range(40):
+        restaurant_elements = self.driver.find_elements(By.XPATH,
+                                                        "//div[@role='feed']//div[contains(@jsaction,'mouseover')]")
+        for restaurant in restaurant_elements:
             try:
-                restaurant_elements = self.driver.find_elements(By.CLASS_NAME, "Nv2PK")
-                # restaurant_elements = self.driver.find_elements(By.CSS_SELECTOR,
-                #                                                 "div[aria-label=\"Results for restaurants in lahore\"] > div:not([class]) > div")
+                data = {}
+                name_element = restaurant.find_element(By.XPATH, ".//a[@aria-label]")
+                restaurant_name = self.clean_data(name_element.get_attribute("aria-label"))
+                link = restaurant.find_element(By.TAG_NAME, "a")
+                restaurant_url = link.get_attribute("href")
 
-                if index >= len(restaurant_elements):
-                    break
-
-                restaurant = restaurant_elements[index]
-                data = {
-                    "name": "NA",
-                    "rating": "NA",
-                    "reviews_count": "NA",
-                    "features": "NA",
-                    "address": "NA",
-                    "website": "NA",
-                    "contact": "NA",
-                    "plus_code": "NA"
-                }
-
-                try:
-                    link = restaurant.find_element(By.TAG_NAME, "a")
-                    self.driver.execute_script("arguments[0].click();", link)
-                    self.wait.until(EC.presence_of_element_located((By.CLASS_NAME, "zvLtDc")))
-                    time.sleep(2)
-
-                    try:
-                        data["name"] = self.driver.find_element(By.CLASS_NAME, "DUwDvf").text
-                    except:
-                        data["name"] = "NA"
-
-                    try:
-                        rating_element = self.driver.find_element(By.CSS_SELECTOR, ".F7nice span span[aria-hidden='true']")
-                        data["rating"] = rating_element.text
-                    except:
-                        data["rating"] = "NA"
-
-                    try:
-                        reviews_count_element = self.driver.find_element(By.CSS_SELECTOR, ".F7nice span span[aria-label]")
-                        data["reviews_count"] = reviews_count_element.text.strip("()")
-                    except:
-                        data["reviews_count"] = "NA"
-
-                    try:
-                        features = self.driver.find_element(By.CLASS_NAME, "E0DTEd")
-                        feature_texts = [feature.text for feature in features.find_elements(By.CLASS_NAME, "LTs0Rc")]
-                        data["features"] = ", ".join(feature_texts)
-                    except:
-                        data["features"] = "NA"
-
-                    try:
-                        address_element = self.driver.find_element(By.CSS_SELECTOR, "[data-item-id='address']")
-                        data["address"] = address_element.text
-                    except:
-                        data["address"] = "NA"
-
-                    try:
-                        website_element = self.driver.find_element(By.CSS_SELECTOR, "[data-item-id='authority']")
-                        data["website"] = website_element.get_attribute("href")
-                    except:
-                        data["website"] = "NA"
-
-                    try:
-                        contact_element = self.driver.find_element(By.CSS_SELECTOR, "[data-item-id^='phone']")
-                        data["contact"] = contact_element.text
-                    except:
-                        data["contact"] = "NA"
-
-                    try:
-                        plus_code_element = self.driver.find_element(By.CSS_SELECTOR, "[data-item-id='oloc']")
-                        data["plus_code"] = plus_code_element.text
-                    except:
-                        data["plus_code"] = "NA"
-
-                    self.location_data.append(data)
-
-                    self.driver.execute_script("window.history.go(-1)")
-                    time.sleep(2)
-
-                except StaleElementReferenceException:
-                    print("Stale element reference encountered; retrying...")
+                if restaurant_url in self.visited_links:
                     continue
 
-            except Exception as e:
-                print(f"Error extracting data for a restaurant: {e}")
+                self.visited_links.add(restaurant_url)
+
+                self.driver.execute_script("arguments[0].click();", link)
+                self.wait.until(EC.presence_of_element_located((By.CLASS_NAME, "id-content-container")))
+                time.sleep(3)
+
+                data["name"] = restaurant_name
+
+                rating_elements = self.driver.find_elements(By.CSS_SELECTOR, ".fontDisplayLarge")
+                data["rating"] = self.clean_data(rating_elements[0].text) if rating_elements else "NA"
+
+                feature_elements = self.driver.find_elements(By.XPATH, '//*[@role="group"]')
+                feature_texts = [feature.text for feature in feature_elements]
+                data["features"] = ", ".join(
+                    [self.clean_data(text) for text in feature_texts]) if feature_texts else "NA"
+
+                address_elements = self.driver.find_elements(By.CSS_SELECTOR, "[data-item-id='address']")
+                data["address"] = self.clean_data(address_elements[0].text) if address_elements else "NA"
+
+                website_elements = self.driver.find_elements(By.CSS_SELECTOR, "[data-item-id='authority']")
+                data["website"] = website_elements[0].get_attribute("href") if website_elements else "NA"
+
+                contact_elements = self.driver.find_elements(By.CSS_SELECTOR, "[data-item-id^='phone']")
+                data["contact"] = self.clean_data(contact_elements[0].text) if contact_elements else "NA"
+
+                plus_code_elements = self.driver.find_elements(By.CSS_SELECTOR, "[data-item-id='oloc']")
+                data["plus_code"] = self.clean_data(plus_code_elements[0].text) if plus_code_elements else "NA"
+
+                self.location_data.append(data)
+
+                self.driver.execute_script("window.history.go(-1)")
+                time.sleep(3)
+
+            except NoSuchElementException as e:
+                print(f"Error extracting data for a restaurant (element not found): {e}")
+                self.driver.execute_script("window.history.go(-1)")
+                time.sleep(3)
+            except StaleElementReferenceException:
+                print("Stale element encountered; retrying...")
+                continue
+
+    def scroll_and_scrape(self, max_restaurants=40):
+        total_restaurants = 0
+        scrollable_div = self.wait.until(EC.presence_of_element_located((By.XPATH, "//div[@role='feed']")))
+        previous_height = self.driver.execute_script("return arguments[0].scrollHeight", scrollable_div)
+
+        while total_restaurants < max_restaurants:
+
+            self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
+            time.sleep(7)
+            new_height = self.driver.execute_script("return arguments[0].scrollHeight", scrollable_div)
+
+            if new_height == previous_height:
+                self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", scrollable_div)
+                time.sleep(5)
+
+            previous_height = new_height
+            self.get_restaurant_data()
+            total_restaurants = len(self.location_data)
+
+    def save_data_to_csv(self, filename="restaurants.csv"):
+        if not self.location_data:
+            print("No data to save.")
+            return
+
+        fieldnames = ["name", "rating", "features", "address", "website", "contact", "plus_code"]
+
+        with open(filename, mode="w", newline="", encoding="utf-8") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            for restaurant in self.location_data:
+                writer.writerow(restaurant)
+
+        print(f"Data saved to {filename}")
 
     def scrape(self):
-        self.search_restaurants()
-        self.scroll_results(max_scrolls=10)
-        self.get_restaurant_data()
-        self.driver.quit()
+        try:
+            self.search_restaurants()
+            self.scroll_and_scrape(max_restaurants=40)
+        finally:
+            self.driver.quit()
         return self.location_data
 
 
 scraper = RestaurantScraper()
 data = scraper.scrape()
-print(data)
+
+scraper.save_data_to_csv("restaurants.csv")
